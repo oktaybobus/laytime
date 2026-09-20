@@ -10,12 +10,25 @@ applied on the local calendar day.
 
 Counting regimes (``cp.laytime_basis``):
 
-- ``SHINC``: every hour counts.
-- ``SHEX`` / ``WWD``: Sundays and the days listed in ``cp.holidays`` do not
-  count. Weather and other stoppages are explicit interruption records, so
-  ``WWD`` behaves like ``SHEX`` inside the engine.
-- ``cp.unless_used``: excepted days do count (the ship is assumed to have
-  worked); idle periods are then deducted through interruption records.
+- ``SHINC``: every hour counts; holidays are ignored.
+- Anything else is an *excepting* regime. Its weekly excepted periods are
+  written out in ``cp.excepted_periods`` as weekday + time windows
+  (``SATPMSHEX``: Saturday 12:00 to Monday 08:00). The engine never derives
+  hours from the regime name. Only ``SHEX`` and ``WWD`` may omit the list,
+  which then means the whole of Sunday, as in 0.1.0.
+- Weather and other stoppages are explicit interruption records, so ``WWD``
+  behaves like ``SHEX`` inside the engine.
+- ``cp.holidays``: a ``YYYY-MM-DD`` string is a whole day; a mapping
+  ``{"date", "from", "to"}`` is part of one. ``cp.holiday_eve_from`` excepts
+  the day before each whole-day holiday from that hour on;
+  ``cp.holiday_resume_time`` stretches each holiday that runs to the end of
+  its day until that hour on the following day.
+- ``cp.unless_used``: with ``cp.unless_used_mode = "actual_time_used"`` only
+  the ``port.worked`` intervals count inside excepted periods. Without a mode
+  (``"whole_period"``, the 0.1.0 behaviour) excepted periods count in full and
+  idle time is deducted through interruption records.
+
+A basis without the 0.2.0 keys gives the result 0.1.0 gave.
 
 Demurrage: once the allowed time is exhausted every hour counts from that
 moment on (*once on demurrage, always on demurrage*). If the charter party
@@ -30,7 +43,11 @@ from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 DAY_SECONDS = Decimal(86400)
-EXCLUDING_BASES = frozenset({"SHEX", "WWD"})
+WEEK = timedelta(days=7)
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+SUNDAY_BASES = frozenset({"SHEX", "WWD"})
+SUNDAY_WINDOW = (timedelta(days=6), WEEK)
+UNLESS_USED_MODES = frozenset({"whole_period", "actual_time_used"})
 
 Interval = tuple[datetime, datetime]
 
@@ -76,19 +93,94 @@ def _clip(intervals: Iterable[Interval], lo: datetime, hi: datetime) -> list[Int
     return clipped
 
 
-def _is_excepted_day(day: date, holidays: set[str]) -> bool:
-    return day.weekday() == 6 or day.isoformat() in holidays
+def _time(value: str) -> time:
+    return time.fromisoformat(value)
 
 
-def _excepted_day_intervals(lo: datetime, hi: datetime, holidays: set[str]) -> list[Interval]:
+def _week_offset(point: dict) -> timedelta:
+    if point["weekday"] not in WEEKDAYS:
+        raise ValueError(f"weekday must be one of {', '.join(WEEKDAYS)}: {point['weekday']!r}")
+    at = _time(point["time"])
+    return timedelta(days=WEEKDAYS.index(point["weekday"]), hours=at.hour, minutes=at.minute)
+
+
+def _weekly_windows(cp: dict) -> list[tuple[timedelta, timedelta]]:
+    """Excepted windows as offsets from Monday 00:00; a window may run into the next week."""
+    regime = cp["laytime_basis"]
+    periods = cp.get("excepted_periods")
+    if regime == "SHINC":
+        if periods:
+            raise ValueError("SHINC counts every hour; cp.excepted_periods must be empty")
+        return []
+    if periods is None:
+        if regime not in SUNDAY_BASES:
+            raise ValueError(f"laytime_basis {regime!r} needs cp.excepted_periods")
+        return [SUNDAY_WINDOW]
+
+    windows: list[tuple[timedelta, timedelta]] = []
+    for period in periods:
+        start, end = _week_offset(period["from"]), _week_offset(period["to"])
+        if start == end:
+            raise ValueError("an excepted period cannot start and end at the same moment")
+        windows.append((start, end if end > start else end + WEEK))
+
+    monday = datetime(2001, 1, 1)
+    one_week = [
+        (monday + start - shift, monday + end - shift)
+        for start, end in windows
+        for shift in (timedelta(0), WEEK)
+    ]
+    if _overlap_seconds(one_week, monday, monday + WEEK) >= _secs(WEEK):
+        raise ValueError("cp.excepted_periods cover the whole week; nothing would ever count")
+    return windows
+
+
+def _holiday_intervals(cp: dict) -> list[Interval]:
+    eve_from = cp.get("holiday_eve_from")
+    resume = cp.get("holiday_resume_time")
     intervals: list[Interval] = []
-    day = lo.date()
-    while day <= hi.date():
-        if _is_excepted_day(day, holidays):
-            start = datetime.combine(day, time.min)
-            intervals.append((start, start + timedelta(days=1)))
-        day += timedelta(days=1)
+    for entry in cp.get("holidays", []):
+        if isinstance(entry, str):
+            entry = {"date": entry}
+        day = date.fromisoformat(entry["date"])
+        next_midnight = datetime.combine(day + timedelta(days=1), time.min)
+        start = datetime.combine(day, _time(entry.get("from", "00:00")))
+        until = entry.get("to", "24:00")
+        end = next_midnight if until == "24:00" else datetime.combine(day, _time(until))
+        if end <= start:
+            raise ValueError(f"holiday {entry['date']} ends before it starts")
+
+        whole_day = start.time() == time.min and end == next_midnight
+        if whole_day and eve_from:
+            intervals.append((datetime.combine(day - timedelta(days=1), _time(eve_from)), start))
+        if end == next_midnight and resume:
+            end = datetime.combine(next_midnight.date(), _time(resume))
+        intervals.append((start, end))
     return intervals
+
+
+def excepted_intervals(cp: dict, lo: datetime, hi: datetime) -> list[Interval]:
+    """The periods between ``lo`` and ``hi`` that do not count under the charter party.
+
+    Weekly windows and holidays merged and clipped; work done inside them
+    (*unless used*) is not taken into account here.
+    """
+    windows = _weekly_windows(cp)
+    if cp["laytime_basis"] == "SHINC":
+        return []
+    intervals = _holiday_intervals(cp)
+    week_start = datetime.combine(lo.date() - timedelta(days=lo.weekday()), time.min) - WEEK
+    while week_start < hi:
+        intervals += [(week_start + start, week_start + end) for start, end in windows]
+        week_start += WEEK
+    return _merge(_clip(intervals, lo, hi))
+
+
+def _unless_used_mode(cp: dict) -> str | None:
+    mode = cp.get("unless_used_mode", "whole_period")
+    if mode not in UNLESS_USED_MODES:
+        raise ValueError(f"unless_used_mode must be one of {sorted(UNLESS_USED_MODES)}: {mode!r}")
+    return mode if cp.get("unless_used", False) else None
 
 
 def _countable_segments(
@@ -126,9 +218,13 @@ def _prepare_port(port: dict, cp: dict) -> dict:
 
     interruptions = [(_dt(item["from"]), _dt(item["to"])) for item in port.get("interruptions", [])]
     exclusions = list(interruptions)
-    holidays = set(cp.get("holidays", []))
-    if cp["laytime_basis"] in EXCLUDING_BASES and not cp.get("unless_used", False):
-        exclusions += _excepted_day_intervals(start, end, holidays)
+    mode = _unless_used_mode(cp)
+    excepted = excepted_intervals(cp, start, end)
+    if mode == "actual_time_used":
+        worked = [(_dt(item["from"]), _dt(item["to"])) for item in port.get("worked", [])]
+        excepted = [idle for s, e in excepted for idle in _countable_segments(s, e, worked)]
+    if mode != "whole_period":
+        exclusions += excepted
 
     return {
         "name": port["name"],
@@ -197,21 +293,23 @@ def _run_ledger(windows: list[dict], allowed_seconds: int, cp: dict):
 def _project_expiry(start: datetime, remaining_seconds: int, cp: dict) -> datetime:
     """Where the unused allowance would have expired on the calendar.
 
-    Needed for ``despatch_on = all_time_saved`` under SHEX: the saved time
-    includes the Sundays and holidays the ship would otherwise have sat through.
+    Needed for ``despatch_on = all_time_saved`` under an excepting regime: the
+    saved time includes the excepted periods the ship would otherwise have sat
+    through. No future work is assumed inside them.
     """
-    excluding = cp["laytime_basis"] in EXCLUDING_BASES and not cp.get("unless_used", False)
-    holidays = set(cp.get("holidays", []))
+    skip_excepted = _unless_used_mode(cp) != "whole_period"
     cursor = start
     remaining = remaining_seconds
     while remaining > 0:
-        if excluding and _is_excepted_day(cursor.date(), holidays):
-            cursor = datetime.combine(cursor.date() + timedelta(days=1), time.min)
-            continue
-        next_midnight = datetime.combine(cursor.date() + timedelta(days=1), time.min)
-        chunk = min(remaining, _secs(next_midnight - cursor))
-        cursor += timedelta(seconds=chunk)
-        remaining -= chunk
+        lookahead = cursor + timedelta(seconds=remaining) + WEEK
+        excepted = excepted_intervals(cp, cursor, lookahead) if skip_excepted else []
+        for seg_start, seg_end in _countable_segments(cursor, lookahead, excepted):
+            chunk = min(remaining, _secs(seg_end - seg_start))
+            remaining -= chunk
+            cursor = seg_start + timedelta(seconds=chunk)
+            if remaining == 0:
+                return cursor
+        cursor = lookahead
     return cursor
 
 

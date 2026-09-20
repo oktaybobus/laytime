@@ -58,6 +58,17 @@ def test_cli_reports_missing_field(tmp_path, capsys):
     assert "demurrage_rate_per_day" in capsys.readouterr().err
 
 
+def test_cli_reports_contradictory_terms(tmp_path, capsys):
+    contradictory = {"cp": {**BASIS["cp"], "laytime_basis": "SATPMSHEX"}, "ports": BASIS["ports"]}
+    path = tmp_path / "contradictory.json"
+    path.write_text(json.dumps(contradictory), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main([str(path)])
+    assert exc.value.code == 1
+    assert "needs cp.excepted_periods" in capsys.readouterr().err
+
+
 def test_cli_reports_unreadable_file(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         main([str(tmp_path / "missing.json")])

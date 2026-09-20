@@ -36,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         result = compute_laytime(basis)
     except KeyError as exc:
         parser.exit(1, f"laytime: missing field {exc} in basis\n")
+    except ValueError as exc:
+        parser.exit(1, f"laytime: {exc}\n")
 
     indent = None if args.compact else 2
     sys.stdout.write(json.dumps(result, indent=indent, ensure_ascii=False) + "\n")

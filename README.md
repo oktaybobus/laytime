@@ -31,8 +31,8 @@ laytime basis.json --compact  # one line
 cat basis.json | laytime -    # from stdin
 ```
 
-Exit code 1 and a message naming the missing field when the basis is
-incomplete; the engine never guesses a value.
+Exit code 1 and a message naming the missing field or the contradictory term
+when the basis is incomplete; the engine never guesses a value.
 
 ## The basis
 
@@ -74,15 +74,19 @@ when the claim is disputed months later.
 
 | Field | Values | Meaning |
 |---|---|---|
-| `laytime_basis` | `SHINC`, `SHEX`, `WWD` | `SHINC` counts every hour. `SHEX` and `WWD` skip Sundays and `holidays`. Weather stoppages are explicit interruptions, so `WWD` behaves like `SHEX` inside the engine. |
-| `unless_used` | bool | Excepted days count anyway; idle time on them is deducted through interruptions. |
+| `laytime_basis` | `SHINC`, `SHEX`, `WWD`, or any label with `excepted_periods` | `SHINC` counts every hour. Every other regime skips its excepted periods and `holidays`. `SHEX` and `WWD` without `excepted_periods` mean the whole of Sunday. Weather stoppages are explicit interruptions, so `WWD` behaves like `SHEX` inside the engine. |
+| `excepted_periods` | list of `{"from": {"weekday", "time"}, "to": {"weekday", "time"}}` | Weekly windows that do not count, written out from the charter party. Weekdays are `mon`…`sun`; a window may run over the end of the week. The engine never derives hours from the regime name: `SATPMSHEX` without this list is an error. |
+| `unless_used` | bool | Work inside an excepted period counts. |
+| `unless_used_mode` | `whole_period`, `actual_time_used` | `actual_time_used`: only the port's `worked` intervals count inside excepted periods. `whole_period` (default, the 0.1.0 behaviour): excepted periods count in full and idle time is deducted through interruptions. |
 | `reversible` | bool | Pool the allowance of all ports into one ledger (time saved at loading carries to discharge) instead of settling each port on its own. |
 | `nor_to_start_hours` | int | Hours between NOR acceptance and the start of laytime. |
-| `holidays` | list of `YYYY-MM-DD` | Local-calendar holidays treated like Sundays. |
+| `holidays` | list of `YYYY-MM-DD` or `{"date", "from", "to"}` | A string is a whole local-calendar day. A mapping excepts part of one: `{"date": "2026-10-28", "from": "13:00"}` is a half-day holiday, `{"date": …, "to": "08:00"}` a morning. |
+| `holiday_eve_from` | `HH:MM` | The day before each whole-day holiday does not count from this hour on. Partial holidays have no eve. |
+| `holiday_resume_time` | `HH:MM` | Each holiday that runs to the end of its day stretches to this hour on the following day. If that day is excepted too the periods merge and its own rule applies. |
 | `demurrage_rate_per_day` | decimal string | Per day, pro rata. |
 | `currency` | string | Echoed into the result. |
 | `despatch_fraction` | `half`, `full` | Half despatch is the dry-bulk default. |
-| `despatch_on` | `working_time_saved`, `all_time_saved` | Under SHEX, all-time-saved projects the unused allowance across the calendar, Sundays included. |
+| `despatch_on` | `working_time_saved`, `all_time_saved` | Under an excepting regime, all-time-saved projects the unused allowance across the calendar, excepted periods included. No future work is assumed inside them. |
 | `interruptions_count_on_demurrage` | bool | Default `false`: *once on demurrage, always on demurrage*. Set `true` only when the charter party says interruptions are deducted after demurrage starts. |
 
 ### `ports[]`
@@ -94,9 +98,10 @@ when the claim is disputed months later.
 | `completed_at` | End of cargo operations. |
 | `allowed` | `{"kind": "fixed_days", "days": "2"}` or `{"kind": "rate", "cargo_qty": "6000", "rate_per_day": "2000"}`. |
 | `interruptions[]` | Explicit `from`/`to`/`reason` records: rain, shifting, breakdown, waiting. There is no "deduct N hours" shortcut; every deduction has a start and an end. |
+| `worked[]` | `from`/`to` records of work done inside excepted periods. Read only under `unless_used_mode: actual_time_used`; interruptions inside them are still deducted. |
 
-All timestamps are **port local time**, naive. Sunday and holiday exclusions
-are applied on the local calendar day. Convert from UTC before building the
+All timestamps are **port local time**, naive. Excepted periods and holidays
+are applied on the local calendar. Convert from UTC before building the
 basis; the engine does not know about time zones on purpose.
 
 ## The result
@@ -143,7 +148,8 @@ in the result is a float. Under `reversible: true` the per-port rows omit
   counting, so a rain stoppage on a Sunday is not deducted twice.
 - **Half despatch by default**, on working time saved by default.
 - **No time zones.** The basis is port-local; the caller converts.
-- **No guessing.** A missing field raises `KeyError` rather than defaulting.
+- **No guessing.** A missing field raises `KeyError` rather than defaulting;
+  contradictory or malformed terms raise `ValueError`.
 
 ## Golden tests
 

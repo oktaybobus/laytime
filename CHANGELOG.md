@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 — unreleased
+
+A basis without the new keys gives the result 0.1.0 gave (checked against
+0.1.0 on 20,000 generated bases).
+
+- `cp.excepted_periods`: weekly excepted windows as weekday + time, so
+  SATPMSHEX, FHEX, Thursday-afternoon-and-Friday and whole-weekend clauses are
+  expressible with the hours the charter party states. Until now the only
+  weekly excepted day was Sunday.
+- `cp.holidays` accepts part of a day (`{"date", "from", "to"}`);
+  `cp.holiday_eve_from` and `cp.holiday_resume_time` cover "from 17:00 on the
+  day before a holiday" and "until 08:00 on the next day".
+- `cp.unless_used_mode = "actual_time_used"` with `port.worked`: only the work
+  actually done inside an excepted period counts.
+- `excepted_intervals(cp, lo, hi)`: the calendar the engine applies, for
+  statements that list the excepted periods.
+- All-time-saved despatch projects across the same calendar.
+- Stricter input: `SHINC` with excepted periods, a regime other than
+  `SHEX`/`WWD` without them, windows that cover the whole week, a malformed
+  holiday date or an unknown `unless_used_mode` raise `ValueError`. 0.1.0
+  silently counted every hour for an unknown regime name.
+
 ## 0.1.0 — 2026-09-03
 
 First public release. Extracted unchanged from the laytime engine that has run
