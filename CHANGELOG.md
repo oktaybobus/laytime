@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1 — 2026-09-20
+
+Documentation and tests only. No result changes: 40,000 generated bases
+(0.1.0-shaped and with the 0.2.0 keys, 22,572 of them multi-port and
+non-reversible) give the 0.2.0 result, errors included.
+
+- The rounding rule is written down (README *Rounding*, engine docstrings) and
+  pinned by `tests/test_rounding.py`. Money is rounded half-up once per
+  settlement: per voyage under `reversible`, per port otherwise, and the
+  voyage totals are exact sums of the rounded per-port amounts. In a
+  multi-port non-reversible result the totals can therefore differ by up to
+  n // 2 cents from the rate applied to the total time. That is the rule, not
+  an error: each port is its own account. It has been so since 0.1.0, stored
+  bases reproduce it, and it does not change.
+- Day figures are display values, each rounded to five decimals from its own
+  seconds; no amount is derived from them, and a day figure times the rate is
+  not expected to match an amount to the cent.
+
 ## 0.2.0 — 2026-09-20
 
 - `cp.excepted_periods`: weekly excepted windows as weekday + time, so
