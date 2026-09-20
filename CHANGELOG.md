@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0 — 2026-09-21
+
+- `cp.commencement`, optional: when laytime starts after the NOR, as a clause
+  instead of a fixed number of hours.
+  `{"kind": "next_working_day", "time"}` starts at `time` on the first day
+  strictly after the NOR day on which that moment is counting time.
+  `{"kind": "gencon", "cutoff", "same_day", "next_day"}` is the GENCON 1976
+  cl. 6(c) shape: NOR at or before `cutoff` starts at `same_day` that day if
+  that moment counts, otherwise at `next_day` on the first later day on which
+  it counts. The hours come from the charter party; the engine has no
+  defaults. Optional `office_hours: {"from", "to"}` on either kind: a NOR
+  outside them, or at a moment that does not count, is treated as given at the
+  next office opening that counts, then the kind's rule applies.
+- **Counting time is the existing calendar**, the one `excepted_intervals`
+  returns: weekly excepted periods, whole and partial holidays, eve tails and
+  resume extensions. Half open, as in the ledger: the moment a period ends is
+  counting time, the moment it starts is not. Every moment counts under
+  `SHINC`. Interruptions and *unless used* do not move the start.
+- The reference NOR is unchanged (`nor_accepted`, else `nor_tendered`), the
+  start is still `ports[].laytime_start`, and **no result key is added**.
+  Reversible calculations apply the clause per port and check voyage order on
+  the resulting starts.
+- Refusals, all `ValueError`: the clause together with a non-zero
+  `nor_to_start_hours`, an unknown kind, missing or extra keys, a malformed
+  `HH:MM`, `same_day` earlier than `cutoff`, `office_hours.from` not earlier
+  than `to`, and no counting moment within 60 days.
+- **No result changes for a basis without `cp.commencement`**: it takes the
+  code path it took before. 40,000 generated bases (0.1.0-shaped and with the
+  0.2.0 keys) give the 0.2.0 result, errors included.
+- The tests for the clause are rule tests with the hand calculation in each
+  docstring, on synthetic facts. There is no golden test for it yet: a golden
+  test needs a real statement of facts.
+- Known limits, not implemented: NOR validity, "unless sooner commenced",
+  "when counting resumes" starts, office hours per weekday, WIBON and its
+  relatives. See README *Commencement*.
+
 ## 0.2.1 — 2026-09-20
 
 Documentation and tests only. No result changes: 40,000 generated bases

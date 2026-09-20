@@ -74,3 +74,22 @@ def test_cli_reports_unreadable_file(tmp_path, capsys):
         main([str(tmp_path / "missing.json")])
     assert exc.value.code == 2
     assert "cannot read basis" in capsys.readouterr().err
+
+
+def test_cli_prints_a_commencement_start_and_refuses_a_contradiction_in_one_line(tmp_path, capsys):
+    """NOR Mon 02 Mar 08:00, next working day 08:00 -> Tue 03 08:00; with 12 hours too: exit 1."""
+    clause = {"kind": "next_working_day", "time": "08:00"}
+    path = tmp_path / "basis.json"
+    path.write_text(json.dumps({**BASIS, "cp": {**BASIS["cp"], "commencement": clause}}), "utf-8")
+    assert main([str(path), "--compact"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ports"][0]["laytime_start"] == "2026-03-03T08:00"
+
+    both = {**BASIS["cp"], "commencement": clause, "nor_to_start_hours": 12}
+    path.write_text(json.dumps({**BASIS, "cp": both}), "utf-8")
+    with pytest.raises(SystemExit) as info:
+        main([str(path)])
+    assert info.value.code == 1
+    lines = capsys.readouterr().err.strip().splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("laytime: cp.commencement and cp.nor_to_start_hours")

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "laytime"
-version = "0.2.1"
+version = "0.3.0"
 description = "GENCON-style laytime, demurrage and despatch calculator for dry-bulk voyage charters"
 readme = "README.md"
 license = "MIT"

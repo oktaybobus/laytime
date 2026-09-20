@@ -80,6 +80,7 @@ when the claim is disputed months later.
 | `unless_used_mode` | `whole_period`, `actual_time_used` | `actual_time_used`: only the port's `worked` intervals count inside excepted periods. `whole_period` (default, the 0.1.0 behaviour): excepted periods count in full and idle time is deducted through interruptions. Giving a mode without `unless_used: true` is an error. |
 | `reversible` | bool | Pool the allowance of all ports into one ledger (time saved at loading carries to discharge) instead of settling each port on its own. The ports must be listed in voyage order; out of order is an error, the engine does not sort. |
 | `nor_to_start_hours` | int | Hours between NOR acceptance and the start of laytime. |
+| `commencement` | mapping, optional | A commencement clause instead of a fixed number of hours: next working day, or the GENCON noon rule, with optional office hours. See *Commencement*. Together with a non-zero `nor_to_start_hours` it is an error. |
 | `holidays` | list of `YYYY-MM-DD` or `{"date", "from", "to"}` | A string is a whole local-calendar day. A mapping excepts part of one: `{"date": "2026-10-28", "from": "13:00"}` is a half-day holiday, `{"date": …, "to": "08:00"}` a morning. |
 | `holiday_eve_from` | `HH:MM` | The day before each whole-day holiday does not count from this hour on. Partial holidays have no eve. |
 | `holiday_resume_time` | `HH:MM` | Each holiday that runs to the end of its day stretches to this hour on the following day. If that day is excepted too the periods merge and its own rule applies. |
@@ -103,6 +104,110 @@ when the claim is disputed months later.
 All timestamps are **port local time**, naive; a UTC offset is an error. Times of day are `HH:MM`; a weekly window and a holiday may end at `24:00`. Result timestamps are printed to the minute, while days and money come from whole seconds. Excepted periods and holidays
 are applied on the local calendar. Convert from UTC before building the
 basis; the engine does not know about time zones on purpose.
+
+## Commencement
+
+When laytime starts after the notice of readiness. Without `cp.commencement`
+it starts `nor_to_start_hours` after the NOR, as it always has. With it, the
+clause decides, and `nor_to_start_hours` must be absent or `0`: two answers to
+the same question raise. The reference NOR is the same in both cases:
+`nor_accepted` when the port has one, otherwise `nor_tendered`. The computed
+start is reported where it always was, in `ports[].laytime_start`; the clause
+adds no result keys.
+
+```json
+{"kind": "next_working_day", "time": "08:00"}
+```
+
+Laytime starts at `time` on the first calendar day **strictly after** the NOR
+day on which that moment is counting time.
+
+```json
+{"kind": "gencon", "cutoff": "12:00", "same_day": "13:00", "next_day": "06:00"}
+```
+
+The shape of GENCON 1976 clause 6(c). A NOR **at or before** `cutoff`, on a day
+whose `same_day` moment is counting time, starts laytime at `same_day` that
+day. Otherwise laytime starts at `next_day` on the first later day whose
+`next_day` moment is counting time. All three hours are read from the charter
+party; the engine has no defaults for them. `same_day` may equal `cutoff` but
+not precede it.
+
+```json
+{"kind": "gencon", "cutoff": "12:00", "same_day": "13:00", "next_day": "06:00",
+ "office_hours": {"from": "08:00", "to": "17:00"}}
+```
+
+`office_hours` is optional on either kind. A NOR outside office hours, or at a
+moment that is not counting time, is treated as given at the next office
+opening that is counting time; **then** the kind's rule applies to that
+moment. Both ends belong to the office hours: a NOR at 17:00 sharp is inside,
+17:01 is given next morning. The same hours apply to every day; which days
+are working days comes from the calendar below, not from a second list.
+
+**Counting time** is the calendar the ledger already applies, the one
+`excepted_intervals` returns, and nothing else. A moment is counting time when
+it is not inside
+
+- a weekly excepted period (`excepted_periods`, or Sunday for plain `SHEX` / `WWD`),
+- a holiday, whole or partial,
+- a holiday eve tail (`holiday_eve_from`),
+- a holiday resume extension (`holiday_resume_time`).
+
+Periods are half open, as in the ledger: the moment a period **starts** is not
+counting time, the moment it **ends** is, because time counts from that
+instant on. Under SATPMSHEX (Saturday 12:00 to Monday 08:00) a Saturday 10:00
+NOR with next working day 08:00 starts laytime on Monday 08:00 exactly. Under
+`SHINC` every moment counts and holidays are not read. Interruptions,
+`worked` and `unless_used` never move the start: they say what counts after
+laytime has started, not when it starts.
+
+The clause names times of day, and the engine takes it at its word. If the
+named moment falls inside an excepted period the start moves to the next day
+on which that moment counts, not to the moment counting resumes: with a
+holiday that resumes at 10:00 and a clause saying 08:00, the start is 08:00
+on the following counting day. A charter party that means "when counting
+resumes" needs different words and is not expressible yet.
+
+| NOR (SHEX unless noted) | clause | laytime starts |
+|---|---|---|
+| Fri 16:00 | next working day 08:00 | Sat 08:00 |
+| Sat 10:00, SATPMSHEX | next working day 08:00 | Mon 08:00 |
+| Thu 16:00, Friday a holiday | next working day 08:00 | Sat 08:00 |
+| Mon 12:00 | gencon 12:00 / 13:00 / 06:00 | Mon 13:00 |
+| Mon 12:01 | gencon 12:00 / 13:00 / 06:00 | Tue 06:00 |
+| Sat 15:00 | gencon 12:00 / 13:00 / 06:00 | Mon 06:00 |
+| Mon 22:00 | gencon, office 08:00-17:00 | Tue 13:00 (given Tue 08:00) |
+| Mon 22:00 | next working day 08:00, office 08:00-17:00 | Wed 08:00 (given Tue 08:00) |
+
+The engine does not guess; each of these is a `ValueError`: the clause with a
+non-zero `nor_to_start_hours`, an unknown `kind`, a missing or an extra key,
+an hour that is not `HH:MM` between 00:00 and 23:59, `same_day` earlier than
+`cutoff`, `office_hours.from` not earlier than `to`, a timestamp with an
+offset. If no counting moment is found within 60 days the engine raises rather
+than searching on. `"commencement": null` is the absent clause.
+
+Under `reversible` the clause applies at each port, exactly as
+`nor_to_start_hours` does, and the voyage-order check runs on the resulting
+starts. As before, a start later than `completed_at` is reported as
+`completed_at` and nothing counts at that port.
+
+Not modelled, on purpose (the caller decides and states the facts):
+
+- **Validity of the NOR.** Whether the ship had arrived, was ready, and the
+  notice was good is a legal question. The engine starts from the NOR it is
+  given.
+- **"Unless sooner commenced."** Work before the start does not bring the
+  start forward, and time used before commencement does not count.
+- **"Before noon" against "up to and including 12:00".** GENCON 1976 says the
+  former, GENCON 1994 the latter. The engine treats a NOR exactly at `cutoff`
+  as in time. For a charter party that reads the other way, write the cutoff
+  one minute earlier.
+- **Office hours per weekday** (Saturday 08:00 to 12:00) and an office that
+  opens inside a partial holiday: the NOR is given at an *opening* that
+  counts, never in the middle of an office day.
+- WIBON, WIPON, WIFPON, WCCON, time lost waiting for berth, and notice given
+  by a particular means or to a particular party.
 
 ## The result
 
@@ -190,6 +295,11 @@ is simple: a golden test is never fixed by updating the expected value. If a
 change to the engine makes one fail, the engine is wrong or the rule has
 changed, and the second case needs a new test with its own hand-verified
 number.
+
+The other test modules are rule tests: synthetic facts, with the hand
+calculation in each docstring. The commencement clause has rule tests only
+(`tests/test_commencement.py`); it gets a golden test when a real statement of
+facts with such a clause is available.
 
 ## Scope
 
