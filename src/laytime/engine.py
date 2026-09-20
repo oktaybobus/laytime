@@ -30,6 +30,33 @@ Counting regimes (``cp.laytime_basis``):
 
 A basis without the 0.2.0 keys gives the result 0.1.0 gave.
 
+Commencement (``cp.commencement``, optional, 0.3.0): when laytime starts after
+the notice of readiness. The reference NOR is ``port.nor_accepted`` when it is
+present, otherwise ``port.nor_tendered``, exactly as for
+``cp.nor_to_start_hours``, which the clause replaces (both together raise).
+
+- ``{"kind": "next_working_day", "time"}``: laytime starts at ``time`` on the
+  first calendar day strictly after the NOR day on which that moment is
+  counting time.
+- ``{"kind": "gencon", "cutoff", "same_day", "next_day"}``: a NOR at or before
+  ``cutoff`` on a day whose ``same_day`` moment is counting time starts
+  laytime at ``same_day`` that day; otherwise laytime starts at ``next_day``
+  on the first later day whose ``next_day`` moment is counting time. All three
+  hours come from the charter party; the engine has no defaults.
+- ``office_hours: {"from", "to"}`` on either kind: a NOR outside office hours
+  (both ends belong to them), or at a moment that is not counting time, is
+  treated as given at the next office opening that is counting time; then the
+  kind's rule applies.
+
+*Counting time* is the calendar of ``excepted_intervals`` and nothing else: a
+moment counts when it is not inside a weekly excepted period, a whole or
+partial holiday, a holiday eve tail or a holiday resume extension. Intervals
+are half open, as in the ledger: the moment an excepted period starts does not
+count, the moment it ends does. Under ``SHINC`` every moment counts.
+Interruptions and *unless used* never move the start. The search gives up
+after 60 days and raises. A basis without ``cp.commencement`` gives the result
+0.2.x gave.
+
 Demurrage: once the allowed time is exhausted every hour counts from that
 moment on (*once on demurrage, always on demurrage*). If the charter party
 says otherwise, ``cp.interruptions_count_on_demurrage`` keeps deducting
@@ -63,6 +90,11 @@ WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 SUNDAY_BASES = frozenset({"SHEX", "WWD"})
 SUNDAY_WINDOW = (timedelta(days=6), WEEK)
 UNLESS_USED_MODES = frozenset({"whole_period", "actual_time_used"})
+COMMENCEMENT_HOURS = {
+    "next_working_day": ("time",),
+    "gencon": ("cutoff", "same_day", "next_day"),
+}
+COMMENCEMENT_SEARCH_DAYS = 60
 
 Interval = tuple[datetime, datetime]
 
@@ -231,6 +263,108 @@ def _unless_used_mode(cp: dict) -> str | None:
     return mode
 
 
+def _clock(mapping: dict, key: str, where: str) -> time:
+    value = mapping[key]
+    if isinstance(value, str) and re.fullmatch(r"\d{2}:\d{2}", value):
+        try:
+            return time.fromisoformat(value)
+        except ValueError:
+            pass
+    raise ValueError(f"{where}.{key} is written HH:MM, from 00:00 to 23:59: {value!r}")
+
+
+def _exact_keys(mapping: object, required: Iterable[str], optional: Iterable[str], where: str):
+    required, optional = set(required), set(optional)
+    if not isinstance(mapping, dict):
+        raise ValueError(f"{where} is a mapping with {sorted(required)}: {mapping!r}")
+    missing = sorted(required - mapping.keys())
+    if missing:
+        raise ValueError(f"{where} is missing {', '.join(repr(key) for key in missing)}")
+    extra = sorted(str(key) for key in mapping.keys() - required - optional)
+    if extra:
+        raise ValueError(f"{where} does not take {', '.join(repr(key) for key in extra)}")
+
+
+def _commencement(cp: dict) -> dict | None:
+    """The commencement clause, validated and parsed; ``None`` when the basis has none."""
+    clause = cp.get("commencement")
+    if clause is None:
+        return None
+    where = "cp.commencement"
+    if not isinstance(clause, dict):
+        raise ValueError(f"{where} is a mapping with a 'kind': {clause!r}")
+    _exact_keys(clause, ["kind"], clause.keys(), where)
+    kind = clause["kind"]
+    if not isinstance(kind, str) or kind not in COMMENCEMENT_HOURS:
+        raise ValueError(f"{where}.kind must be one of {sorted(COMMENCEMENT_HOURS)}: {kind!r}")
+    where = f"{where} ({kind})"
+    hours = COMMENCEMENT_HOURS[kind]
+    _exact_keys(clause, ["kind", *hours], ["office_hours"], where)
+    parsed = {"kind": kind, "office_hours": None}
+    parsed.update({key: _clock(clause, key, "cp.commencement") for key in hours})
+    if kind == "gencon" and parsed["same_day"] < parsed["cutoff"]:
+        raise ValueError(
+            f"cp.commencement.same_day ({clause['same_day']}) is earlier than "
+            f"cutoff ({clause['cutoff']}); laytime cannot start before the notice"
+        )
+
+    if clause.get("office_hours") is not None:
+        office = clause["office_hours"]
+        where = "cp.commencement.office_hours"
+        _exact_keys(office, ["from", "to"], [], where)
+        opens, closes = _clock(office, "from", where), _clock(office, "to", where)
+        if opens >= closes:
+            raise ValueError(
+                f"{where}.from ({office['from']}) must be earlier than to ({office['to']})"
+            )
+        parsed["office_hours"] = (opens, closes)
+
+    if cp.get("nor_to_start_hours") not in (0, None):
+        raise ValueError(
+            "cp.commencement and cp.nor_to_start_hours are two answers to the same question; "
+            f"give one of them (nor_to_start_hours is {cp['nor_to_start_hours']!r})"
+        )
+    return parsed
+
+
+def _counts(cp: dict, moment: datetime) -> bool:
+    """Whether laytime counts from ``moment`` on: it is not inside an excepted interval.
+
+    Half open, like the ledger: the moment an excepted period starts does not count, the moment
+    it ends does. Interruptions and *unless used* are not part of this calendar.
+    """
+    probe = excepted_intervals(cp, moment, moment + timedelta(seconds=1))
+    return not any(start <= moment for start, _ in probe)
+
+
+def _first_counting(cp: dict, first_day: date, at: time, after: datetime | None = None) -> datetime:
+    for offset in range(COMMENCEMENT_SEARCH_DAYS):
+        moment = datetime.combine(first_day + timedelta(days=offset), at)
+        if (after is None or moment > after) and _counts(cp, moment):
+            return moment
+    raise ValueError(
+        f"no counting time at {at:%H:%M} within {COMMENCEMENT_SEARCH_DAYS} days of {first_day}; "
+        "cp.commencement cannot be met under this calendar"
+    )
+
+
+def _commence(nor: datetime, clause: dict, cp: dict) -> datetime:
+    """Start of laytime for a NOR under the commencement clause."""
+    given = nor
+    if clause["office_hours"] is not None:
+        opens, closes = clause["office_hours"]
+        if not (opens <= nor.time() <= closes and _counts(cp, nor)):
+            given = _first_counting(cp, nor.date(), opens, after=nor)
+
+    tomorrow = given.date() + timedelta(days=1)
+    if clause["kind"] == "next_working_day":
+        return _first_counting(cp, tomorrow, clause["time"])
+    same_day = datetime.combine(given.date(), clause["same_day"])
+    if given.time() <= clause["cutoff"] and _counts(cp, same_day):
+        return same_day
+    return _first_counting(cp, tomorrow, clause["next_day"])
+
+
 def _countable_segments(
     lo: datetime, hi: datetime, exclusions: Iterable[Interval]
 ) -> list[Interval]:
@@ -263,9 +397,12 @@ def _allowed_seconds(allowed: dict) -> int:
     return int((days * DAY_SECONDS).quantize(Decimal("1"), ROUND_HALF_UP))
 
 
-def _prepare_port(port: dict, cp: dict) -> dict:
+def _prepare_port(port: dict, cp: dict, commencement: dict | None = None) -> dict:
     nor = port.get("nor_accepted") or port["nor_tendered"]
-    start = _dt(nor) + timedelta(hours=cp.get("nor_to_start_hours", 0))
+    if commencement is None:
+        start = _dt(nor) + timedelta(hours=cp.get("nor_to_start_hours", 0))
+    else:
+        start = _commence(_dt(nor), commencement, cp)
     end = _dt(port["completed_at"])
     start = min(start, end)
 
@@ -389,7 +526,8 @@ def compute_laytime(basis: dict) -> dict:
     """
     cp = basis["cp"]
     rate = Decimal(str(cp["demurrage_rate_per_day"]))
-    windows = [_prepare_port(port, cp) for port in basis["ports"]]
+    commencement = _commencement(cp)
+    windows = [_prepare_port(port, cp, commencement) for port in basis["ports"]]
 
     ports_out: list[dict] = []
     total_allowed = 0
