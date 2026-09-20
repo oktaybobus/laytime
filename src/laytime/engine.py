@@ -34,6 +34,20 @@ Demurrage: once the allowed time is exhausted every hour counts from that
 moment on (*once on demurrage, always on demurrage*). If the charter party
 says otherwise, ``cp.interruptions_count_on_demurrage`` keeps deducting
 interruption records after demurrage has started.
+
+Rounding: time is kept in whole seconds and nothing is rounded until a figure
+is written into the result. Money is rounded half-up to 0.01 once per
+settlement. Under ``reversible`` the voyage is one settlement. Otherwise each
+port is its own settlement: its demurrage and its despatch are rounded, and
+``demurrage_amount``, ``despatch_amount`` and ``net_amount`` are exact sums of
+those per-port amounts. The totals are therefore not the rate applied to the
+total time on demurrage; with n ports they can differ from that figure by up
+to n // 2 cents. Day figures are rounded half-up to five decimals for display,
+each from its own seconds, so the per-port days need not add up to the total
+in the last decimal, and no amount is derived from a rounded day figure: a
+displayed day figure times the rate is not expected to reproduce an amount to
+the cent. This rule is part of the result a stored basis must reproduce and
+has been the same since 0.1.0.
 """
 
 from __future__ import annotations
@@ -73,6 +87,13 @@ def _days(seconds: int) -> str:
 
 
 def _money(seconds: int, rate_per_day: Decimal) -> Decimal:
+    """Pro rata amount for one settlement, rounded half-up to 0.01.
+
+    The only place money is rounded, and it is applied once to each amount:
+    once per voyage under ``reversible``, once per port otherwise (see
+    *Rounding* in the module docstring). Callers add the rounded amounts and
+    never round a sum again.
+    """
     amount = Decimal(seconds) * rate_per_day / DAY_SECONDS
     return amount.quantize(Decimal("0.01"), ROUND_HALF_UP)
 
@@ -395,6 +416,8 @@ def compute_laytime(basis: dict) -> dict:
         )
         total_despatch = despatch_secs
     else:
+        # Each port stands alone: its money is rounded inside _settle and the totals below are
+        # exact sums of the rounded per-port amounts, not total days times the rate.
         for window in windows:
             allowed = window["allowed_seconds"]
             counted, dem_secs, dem_start, port_rows = _run_ledger([window], allowed, cp)

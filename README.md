@@ -138,6 +138,35 @@ both rounded half-up from exact `Decimal` arithmetic on whole seconds. Nothing
 in the result is a float. Under `reversible: true` the per-port rows omit
 `allowed_days` and `despatch_days` because those only exist for the pool.
 
+### Rounding
+
+Time is kept in whole seconds and nothing is rounded until it is written into
+the result.
+
+- **Money is rounded once per settlement**, half-up to 0.01. Under
+  `reversible: true` the voyage is one settlement. Otherwise every port is
+  settled on its own: its demurrage and its despatch are rounded, and
+  `demurrage_amount`, `despatch_amount` and `net_amount` are exact sums of
+  those per-port amounts.
+- The totals of a multi-port, non-reversible result are therefore **not** the
+  rate applied to the total time. One minute over at each of two ports at
+  10000 a day is 6.94 + 6.94 = 13.88; two minutes priced in one go would be
+  13.89. With n ports the two figures can be up to n // 2 cents apart. The
+  per-port figure is the result: each port is its own account, and the lines
+  of a statement add up to its total.
+- The per-port money is not a separate key. Without `reversible` a port's
+  share is what `compute_laytime` returns for a basis holding that port alone,
+  and the shares add up to the totals exactly.
+- **Day figures are for display.** Each is rounded half-up to five decimals
+  from its own seconds, so per-port days need not add up to the total in the
+  last decimal (0.00069 + 0.00069 against 0.00139), and no amount is derived
+  from a rounded day figure. A displayed day figure times the rate is not
+  expected to reproduce an amount to the cent, not even for a single port:
+  five decimals of a day at 10000 a day are steps of 0.10.
+
+This has been the rule since 0.1.0 and it is part of what a stored basis
+reproduces. `tests/test_rounding.py` pins it.
+
 ## Rules the engine commits to
 
 - **Once on demurrage, always on demurrage.** After the allowance is
@@ -147,6 +176,9 @@ in the result is a float. Under `reversible: true` the per-port rows omit
   an end. Overlapping interruptions and excepted days are merged before
   counting, so a rain stoppage on a Sunday is not deducted twice.
 - **Half despatch by default**, on working time saved by default.
+- **Money is rounded once per settlement**: per voyage under reversible
+  laytime, per port otherwise, and totals are sums of rounded amounts (see
+  *Rounding*).
 - **No time zones.** The basis is port-local; the caller converts.
 - **No guessing.** A missing field raises `KeyError` rather than defaulting;
   contradictory or malformed terms raise `ValueError`.
