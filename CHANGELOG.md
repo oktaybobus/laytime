@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-09-20
 
 - `cp.excepted_periods`: weekly excepted windows as weekday + time, so
   SATPMSHEX, FHEX, Thursday-afternoon-and-Friday and whole-weekend clauses are
