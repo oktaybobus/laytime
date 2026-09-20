@@ -14,6 +14,11 @@
 - `excepted_intervals(cp, lo, hi)`: the calendar the engine applies, for
   statements that list the excepted periods.
 - All-time-saved despatch projects across the same calendar.
+- **Fix:** a reversible basis whose ports were not listed in voyage order gave
+  a different result for the same facts (the pooled allowance is consumed in
+  list order, and all-time-saved despatch is projected from the last port in
+  the list). The engine now raises instead of taking the list as written; it
+  does not sort, because the order is part of the evidence.
 - A weekly window may end at `24:00` ("Saturday noon to Sunday 24:00").
 - Stricter input, all `ValueError`. Contradictory terms: `SHINC` with excepted
   periods, a regime other than `SHEX`/`WWD` without them, windows that cover
@@ -23,8 +28,9 @@
   Malformed values: a holiday that is not `YYYY-MM-DD` (checked under `SHINC`
   too), a time of day that is not `HH:MM`.
 - **Compatibility, precisely.** A well-formed 0.1.0 basis gives the 0.1.0
-  result (checked against 0.1.0 on 20,000 generated bases). Three shapes that
-  0.1.0 computed now raise instead: a regime name other than the three it knew
+  result (checked against 0.1.0 on 20,000 generated bases). Four shapes that
+  0.1.0 computed now raise instead: a reversible basis with its ports out of
+  voyage order (see the fix above), a regime name other than the three it knew
   (it silently counted every hour), a holiday string not in `YYYY-MM-DD` (it
   silently ignored it; `20260304` would otherwise have started to count as a
   holiday), and offset-bearing timestamps (they worked only when no Sunday or

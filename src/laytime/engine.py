@@ -381,6 +381,12 @@ def compute_laytime(basis: dict) -> dict:
     if cp.get("reversible", False):
         if not windows:
             raise ValueError("a reversible basis needs at least one port")
+        for earlier, later in zip(windows, windows[1:], strict=False):
+            if later["start"] < earlier["start"]:
+                raise ValueError(
+                    f"reversible laytime runs from port to port: {later['name']!r} starts "
+                    f"before {earlier['name']!r}; list the ports in voyage order"
+                )
         total_allowed = sum(w["allowed_seconds"] for w in windows)
         counted, dem_secs, dem_start, ports_out = _run_ledger(windows, total_allowed, cp)
         total_counted, total_demurrage = counted, dem_secs

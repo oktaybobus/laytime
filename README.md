@@ -78,7 +78,7 @@ when the claim is disputed months later.
 | `excepted_periods` | list of `{"from": {"weekday", "time"}, "to": {"weekday", "time"}}` | Weekly windows that do not count, written out from the charter party. Weekdays are `mon`…`sun`; a window may run over the end of the week. The engine never derives hours from the regime name: `SATPMSHEX` without this list is an error. |
 | `unless_used` | bool | Work inside an excepted period counts. |
 | `unless_used_mode` | `whole_period`, `actual_time_used` | `actual_time_used`: only the port's `worked` intervals count inside excepted periods. `whole_period` (default, the 0.1.0 behaviour): excepted periods count in full and idle time is deducted through interruptions. Giving a mode without `unless_used: true` is an error. |
-| `reversible` | bool | Pool the allowance of all ports into one ledger (time saved at loading carries to discharge) instead of settling each port on its own. |
+| `reversible` | bool | Pool the allowance of all ports into one ledger (time saved at loading carries to discharge) instead of settling each port on its own. The ports must be listed in voyage order; out of order is an error, the engine does not sort. |
 | `nor_to_start_hours` | int | Hours between NOR acceptance and the start of laytime. |
 | `holidays` | list of `YYYY-MM-DD` or `{"date", "from", "to"}` | A string is a whole local-calendar day. A mapping excepts part of one: `{"date": "2026-10-28", "from": "13:00"}` is a half-day holiday, `{"date": …, "to": "08:00"}` a morning. |
 | `holiday_eve_from` | `HH:MM` | The day before each whole-day holiday does not count from this hour on. Partial holidays have no eve. |

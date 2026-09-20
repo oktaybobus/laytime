@@ -243,3 +243,43 @@ def test_result_is_json_serialisable_without_floats():
 def test_invalid_allowed_kind_raises():
     with pytest.raises(KeyError):
         compute_laytime(basis(None, [port(allowed={"kind": "rate"})]))
+
+
+def _saturday_and_tuesday_ports():
+    saturday = port(name="Samsun", nor="2026-03-07T08:00", completed="2026-03-07T20:00")
+    tuesday = port(name="Iskenderun", nor="2026-03-03T08:00", completed="2026-03-03T20:00")
+    return saturday, tuesday
+
+
+def test_golden_reversible_all_time_saved_projects_from_the_last_port():
+    """2 + 2 days pooled, 12 h used at each port: 3 days left. Laytime last ran on Saturday
+    07 Mar 20:00; three days from there skip Sunday 08 and expire Wed 11 Mar 20:00 -> 4 days
+    saved, full despatch at 6000 = 24000."""
+    saturday, tuesday = _saturday_and_tuesday_ports()
+    cp = {
+        "laytime_basis": "SHEX",
+        "reversible": True,
+        "despatch_on": "all_time_saved",
+        "despatch_fraction": "full",
+        "demurrage_rate_per_day": "6000",
+    }
+    result = compute_laytime(basis(cp, [tuesday, saturday]))
+    assert result["used_days"] == "1.00000"
+    assert result["despatch_days"] == "4.00000"
+    assert result["despatch_amount"] == "24000.00"
+
+
+def test_reversible_ports_out_of_voyage_order_raise():
+    """0.1.0 took the list as written and paid 18000 instead of 24000 for the same facts. The
+    pooled allowance runs from port to port, so the order is part of the result: the engine
+    refuses to pick one."""
+    saturday, tuesday = _saturday_and_tuesday_ports()
+    with pytest.raises(ValueError, match="Iskenderun"):
+        compute_laytime(basis({"laytime_basis": "SHEX", "reversible": True}, [saturday, tuesday]))
+
+
+def test_port_order_does_not_matter_without_reversible():
+    saturday, tuesday = _saturday_and_tuesday_ports()
+    forward = compute_laytime(basis({"laytime_basis": "SHEX"}, [tuesday, saturday]))
+    backward = compute_laytime(basis({"laytime_basis": "SHEX"}, [saturday, tuesday]))
+    assert forward["net_amount"] == backward["net_amount"]
