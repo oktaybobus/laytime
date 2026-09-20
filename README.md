@@ -77,7 +77,7 @@ when the claim is disputed months later.
 | `laytime_basis` | `SHINC`, `SHEX`, `WWD`, or any label with `excepted_periods` | `SHINC` counts every hour. Every other regime skips its excepted periods and `holidays`. `SHEX` and `WWD` without `excepted_periods` mean the whole of Sunday. Weather stoppages are explicit interruptions, so `WWD` behaves like `SHEX` inside the engine. |
 | `excepted_periods` | list of `{"from": {"weekday", "time"}, "to": {"weekday", "time"}}` | Weekly windows that do not count, written out from the charter party. Weekdays are `mon`…`sun`; a window may run over the end of the week. The engine never derives hours from the regime name: `SATPMSHEX` without this list is an error. |
 | `unless_used` | bool | Work inside an excepted period counts. |
-| `unless_used_mode` | `whole_period`, `actual_time_used` | `actual_time_used`: only the port's `worked` intervals count inside excepted periods. `whole_period` (default, the 0.1.0 behaviour): excepted periods count in full and idle time is deducted through interruptions. |
+| `unless_used_mode` | `whole_period`, `actual_time_used` | `actual_time_used`: only the port's `worked` intervals count inside excepted periods. `whole_period` (default, the 0.1.0 behaviour): excepted periods count in full and idle time is deducted through interruptions. Giving a mode without `unless_used: true` is an error. |
 | `reversible` | bool | Pool the allowance of all ports into one ledger (time saved at loading carries to discharge) instead of settling each port on its own. |
 | `nor_to_start_hours` | int | Hours between NOR acceptance and the start of laytime. |
 | `holidays` | list of `YYYY-MM-DD` or `{"date", "from", "to"}` | A string is a whole local-calendar day. A mapping excepts part of one: `{"date": "2026-10-28", "from": "13:00"}` is a half-day holiday, `{"date": …, "to": "08:00"}` a morning. |
@@ -100,7 +100,7 @@ when the claim is disputed months later.
 | `interruptions[]` | Explicit `from`/`to`/`reason` records: rain, shifting, breakdown, waiting. There is no "deduct N hours" shortcut; every deduction has a start and an end. |
 | `worked[]` | `from`/`to` records of work done inside excepted periods. Read only under `unless_used_mode: actual_time_used`; interruptions inside them are still deducted. |
 
-All timestamps are **port local time**, naive. Excepted periods and holidays
+All timestamps are **port local time**, naive; a UTC offset is an error. Times of day are `HH:MM`; a weekly window and a holiday may end at `24:00`. Result timestamps are printed to the minute, while days and money come from whole seconds. Excepted periods and holidays
 are applied on the local calendar. Convert from UTC before building the
 basis; the engine does not know about time zones on purpose.
 

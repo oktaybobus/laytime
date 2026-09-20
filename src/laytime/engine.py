@@ -38,6 +38,7 @@ interruption records after demurrage has started.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -53,7 +54,10 @@ Interval = tuple[datetime, datetime]
 
 
 def _dt(value: str) -> datetime:
-    return datetime.fromisoformat(value)
+    moment = datetime.fromisoformat(value)
+    if moment.tzinfo is not None:
+        raise ValueError(f"timestamps are port-local and carry no offset: {value!r}")
+    return moment
 
 
 def _iso(value: datetime) -> str:
@@ -94,14 +98,26 @@ def _clip(intervals: Iterable[Interval], lo: datetime, hi: datetime) -> list[Int
 
 
 def _time(value: str) -> time:
+    if not re.fullmatch(r"\d{2}:\d{2}", str(value)):
+        raise ValueError(f"time of day is written HH:MM: {value!r}")
     return time.fromisoformat(value)
 
 
-def _week_offset(point: dict) -> timedelta:
+def _day(value: str) -> date:
+    # fromisoformat also reads 20260304 and 2026-W10-3; 0.1.0 matched YYYY-MM-DD only.
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value)):
+        raise ValueError(f"holiday dates are written YYYY-MM-DD: {value!r}")
+    return date.fromisoformat(value)
+
+
+def _week_offset(point: dict, *, closing: bool = False) -> timedelta:
     if point["weekday"] not in WEEKDAYS:
         raise ValueError(f"weekday must be one of {', '.join(WEEKDAYS)}: {point['weekday']!r}")
+    day = timedelta(days=WEEKDAYS.index(point["weekday"]))
+    if closing and point["time"] == "24:00":
+        return day + timedelta(days=1)
     at = _time(point["time"])
-    return timedelta(days=WEEKDAYS.index(point["weekday"]), hours=at.hour, minutes=at.minute)
+    return day + timedelta(hours=at.hour, minutes=at.minute)
 
 
 def _weekly_windows(cp: dict) -> list[tuple[timedelta, timedelta]]:
@@ -117,9 +133,12 @@ def _weekly_windows(cp: dict) -> list[tuple[timedelta, timedelta]]:
             raise ValueError(f"laytime_basis {regime!r} needs cp.excepted_periods")
         return [SUNDAY_WINDOW]
 
+    if not isinstance(periods, list) or not all(isinstance(p, dict) for p in periods):
+        raise ValueError("cp.excepted_periods is a list of {from, to} mappings")
     windows: list[tuple[timedelta, timedelta]] = []
     for period in periods:
-        start, end = _week_offset(period["from"]), _week_offset(period["to"])
+        start = _week_offset(period["from"])
+        end = _week_offset(period["to"], closing=True) % WEEK
         if start == end:
             raise ValueError("an excepted period cannot start and end at the same moment")
         windows.append((start, end if end > start else end + WEEK))
@@ -142,7 +161,7 @@ def _holiday_intervals(cp: dict) -> list[Interval]:
     for entry in cp.get("holidays", []):
         if isinstance(entry, str):
             entry = {"date": entry}
-        day = date.fromisoformat(entry["date"])
+        day = _day(entry["date"])
         next_midnight = datetime.combine(day + timedelta(days=1), time.min)
         start = datetime.combine(day, _time(entry.get("from", "00:00")))
         until = entry.get("to", "24:00")
@@ -162,13 +181,17 @@ def _holiday_intervals(cp: dict) -> list[Interval]:
 def excepted_intervals(cp: dict, lo: datetime, hi: datetime) -> list[Interval]:
     """The periods between ``lo`` and ``hi`` that do not count under the charter party.
 
-    Weekly windows and holidays merged and clipped; work done inside them
-    (*unless used*) is not taken into account here.
+    Weekly windows and holidays merged and clipped. This is the charter-party
+    calendar before *unless used* is applied: under ``whole_period`` these
+    periods count in full, under ``actual_time_used`` the port's ``worked``
+    intervals inside them count.
     """
+    if hi < lo:
+        raise ValueError("excepted_intervals: the range ends before it starts")
     windows = _weekly_windows(cp)
+    intervals = _holiday_intervals(cp)
     if cp["laytime_basis"] == "SHINC":
         return []
-    intervals = _holiday_intervals(cp)
     week_start = datetime.combine(lo.date() - timedelta(days=lo.weekday()), time.min) - WEEK
     while week_start < hi:
         intervals += [(week_start + start, week_start + end) for start, end in windows]
@@ -180,7 +203,11 @@ def _unless_used_mode(cp: dict) -> str | None:
     mode = cp.get("unless_used_mode", "whole_period")
     if mode not in UNLESS_USED_MODES:
         raise ValueError(f"unless_used_mode must be one of {sorted(UNLESS_USED_MODES)}: {mode!r}")
-    return mode if cp.get("unless_used", False) else None
+    if not cp.get("unless_used", False):
+        if "unless_used_mode" in cp:
+            raise ValueError("cp.unless_used_mode is given but cp.unless_used is not true")
+        return None
+    return mode
 
 
 def _countable_segments(
@@ -206,7 +233,12 @@ def _allowed_seconds(allowed: dict) -> int:
     if allowed["kind"] == "fixed_days":
         days = Decimal(str(allowed["days"]))
     else:
-        days = Decimal(str(allowed["cargo_qty"])) / Decimal(str(allowed["rate_per_day"]))
+        rate = Decimal(str(allowed["rate_per_day"]))
+        if rate <= 0:
+            raise ValueError(f"allowed.rate_per_day must be positive: {allowed['rate_per_day']!r}")
+        days = Decimal(str(allowed["cargo_qty"])) / rate
+    if days < 0:
+        raise ValueError("the time allowed cannot be negative")
     return int((days * DAY_SECONDS).quantize(Decimal("1"), ROUND_HALF_UP))
 
 
@@ -347,6 +379,8 @@ def compute_laytime(basis: dict) -> dict:
     despatch_amount = Decimal("0")
 
     if cp.get("reversible", False):
+        if not windows:
+            raise ValueError("a reversible basis needs at least one port")
         total_allowed = sum(w["allowed_seconds"] for w in windows)
         counted, dem_secs, dem_start, ports_out = _run_ledger(windows, total_allowed, cp)
         total_counted, total_demurrage = counted, dem_secs

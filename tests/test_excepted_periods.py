@@ -312,6 +312,17 @@ def test_excepted_intervals_are_empty_under_shinc():
             ]
         },
         {"unless_used": True, "unless_used_mode": "half_time"},
+        {"unless_used": False, "unless_used_mode": "actual_time_used"},
+        {"excepted_periods": "SATPMSHEX"},
+        {
+            "excepted_periods": [
+                {"from": {"weekday": "sat", "time": "12:00:59"}, "to": SATPM[0]["to"]}
+            ]
+        },
+        {"excepted_periods": [{"from": {"weekday": "sat", "time": "24:00"}, "to": SATPM[0]["to"]}]},
+        {"holidays": ["20260304"]},
+        {"holidays": ["2026-W10-3"]},
+        {"laytime_basis": "SHINC", "holidays": ["not-a-date"]},
         {"holidays": [{"date": "2026-03-04", "from": "13:00", "to": "09:00"}]},
         {"holidays": ["2026-3-4"]},
     ],
@@ -322,6 +333,13 @@ def test_excepted_intervals_are_empty_under_shinc():
         "zero-length-window",
         "windows-cover-the-whole-week",
         "unknown-unless-used-mode",
+        "mode-without-unless-used",
+        "windows-not-a-list",
+        "window-time-with-seconds",
+        "window-starting-at-24",
+        "holiday-in-basic-iso-format",
+        "holiday-in-week-format",
+        "malformed-holiday-under-shinc",
         "holiday-ends-before-it-starts",
         "malformed-holiday-date",
     ],
@@ -329,3 +347,36 @@ def test_excepted_intervals_are_empty_under_shinc():
 def test_contradictory_or_malformed_terms_raise(cp_extra):
     with pytest.raises(ValueError):
         compute_laytime(basis(cp_extra, [port()]))
+
+
+def test_window_may_end_at_twenty_four_hundred():
+    """'Saturday noon to Sunday 24:00' is Saturday 12:00 to Monday 00:00: 36 h of 96 h."""
+    window = [
+        {"from": {"weekday": "sat", "time": "12:00"}, "to": {"weekday": "sun", "time": "24:00"}}
+    ]
+    assert used({"excepted_periods": window}) == "2.50000"
+
+
+@pytest.mark.parametrize(
+    "port_kwargs",
+    [
+        {"nor": "2026-03-02T08:00+03:00"},
+        {"completed": "2026-03-10T08:00+03:00"},
+        {"allowed": {"kind": "rate", "cargo_qty": "6000", "rate_per_day": "0"}},
+        {"allowed": {"kind": "fixed_days", "days": "-1"}},
+    ],
+    ids=["nor-with-offset", "completion-with-offset", "zero-rate", "negative-allowance"],
+)
+def test_port_facts_the_engine_cannot_honour_raise(port_kwargs):
+    with pytest.raises(ValueError):
+        compute_laytime(basis({"laytime_basis": "SHINC"}, [port(**port_kwargs)]))
+
+
+def test_reversible_basis_without_ports_raises():
+    with pytest.raises(ValueError):
+        compute_laytime(basis({"reversible": True}, []))
+
+
+def test_excepted_intervals_reject_an_inverted_range():
+    with pytest.raises(ValueError):
+        excepted_intervals(basis()["cp"], datetime(2026, 3, 10), datetime(2026, 3, 1))

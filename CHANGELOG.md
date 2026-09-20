@@ -2,9 +2,6 @@
 
 ## 0.2.0 — unreleased
 
-A basis without the new keys gives the result 0.1.0 gave (checked against
-0.1.0 on 20,000 generated bases).
-
 - `cp.excepted_periods`: weekly excepted windows as weekday + time, so
   SATPMSHEX, FHEX, Thursday-afternoon-and-Friday and whole-weekend clauses are
   expressible with the hours the charter party states. Until now the only
@@ -17,10 +14,21 @@ A basis without the new keys gives the result 0.1.0 gave (checked against
 - `excepted_intervals(cp, lo, hi)`: the calendar the engine applies, for
   statements that list the excepted periods.
 - All-time-saved despatch projects across the same calendar.
-- Stricter input: `SHINC` with excepted periods, a regime other than
-  `SHEX`/`WWD` without them, windows that cover the whole week, a malformed
-  holiday date or an unknown `unless_used_mode` raise `ValueError`. 0.1.0
-  silently counted every hour for an unknown regime name.
+- A weekly window may end at `24:00` ("Saturday noon to Sunday 24:00").
+- Stricter input, all `ValueError`. Contradictory terms: `SHINC` with excepted
+  periods, a regime other than `SHEX`/`WWD` without them, windows that cover
+  the whole week, `unless_used_mode` without `unless_used`, an unknown mode.
+  Facts the engine cannot honour: a timestamp with a UTC offset, a rate of
+  zero or less, a negative allowance, a reversible basis without ports.
+  Malformed values: a holiday that is not `YYYY-MM-DD` (checked under `SHINC`
+  too), a time of day that is not `HH:MM`.
+- **Compatibility, precisely.** A well-formed 0.1.0 basis gives the 0.1.0
+  result (checked against 0.1.0 on 20,000 generated bases). Three shapes that
+  0.1.0 computed now raise instead: a regime name other than the three it knew
+  (it silently counted every hour), a holiday string not in `YYYY-MM-DD` (it
+  silently ignored it; `20260304` would otherwise have started to count as a
+  holiday), and offset-bearing timestamps (they worked only when no Sunday or
+  holiday fell inside the port stay).
 
 ## 0.1.0 — 2026-09-03
 
